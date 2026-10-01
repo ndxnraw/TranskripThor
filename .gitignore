@@ -1,0 +1,8 @@
+/work/
+/outputs/*
+!/outputs/zdroj/
+__pycache__/
+*.pyc
+.venv/
+build/
+dist/
