@@ -5,7 +5,7 @@ from PIL import Image, ImageTk
 from tkinter import ttk, messagebox
 from window_style import titlebar, rounded_styles
 
-VERSION = '1.5.1'
+VERSION = '2.0.2'
 AUTHOR = 'Created by Daniel Návojský using Codex | 2026'
 PALETTES = {
     'dark': dict(bg='#0c1422', card='#152135', field='#101b2d', text='#edf3ff', muted='#bdcbe0', border='#293a53', blue='#2383ff', info='#172f50', disabled='#344259'),
@@ -17,7 +17,7 @@ def build_ui(app, root, languages, models, output, cache):
     scale = max(1.0, root.winfo_fpixels('1i') / 96)
     width = min(round(1120 * scale), root.winfo_screenwidth() - 60)
     height = min(round(850 * scale), root.winfo_screenheight() - 90)
-    root.geometry(f'{width}x{height}')
+    root.geometry(f'{width}x{height}+20+20')
     root.minsize(min(920, width), min(620, height))
     app.theme = 'dark'
     app.style = ttk.Style(root)
@@ -35,8 +35,8 @@ def build_ui(app, root, languages, models, output, cache):
     header.pack(fill='x', pady=(0, 10))
     logo = Image.open(Path(__file__).resolve().parent / 'assets' / 'transkripthor.png')
     size = round(56 * scale)
-    app.logo_image = ImageTk.PhotoImage(logo.resize((size, size), Image.Resampling.LANCZOS))
-    app.window_icon = ImageTk.PhotoImage(logo.resize((256, 256), Image.Resampling.LANCZOS))
+    app.logo_image = ImageTk.PhotoImage(logo.resize((size, size), Image.Resampling.LANCZOS), master=root)
+    app.window_icon = ImageTk.PhotoImage(logo.resize((256, 256), Image.Resampling.LANCZOS), master=root)
     root.iconphoto(True, app.window_icon)
     icon = tk.Label(header, image=app.logo_image, bd=0)
     icon.pack(side='left', padx=(0, 15))
@@ -49,28 +49,42 @@ def build_ui(app, root, languages, models, output, cache):
     app.theme_button.pack(side='right')
     ttk.Button(header, text='Pomoc', command=lambda: messagebox.showinfo('Pomoc', 'Pridajte nahrávky, vyberte jazyk a model a spustite prepis.\n\nPri prvom použití sa vybraný model stiahne z internetu. KInIT je samostatná voľba iba pre slovenčinu (približne 6,2 GB). Pre ostatné jazyky použite Small, Medium, Large v3 alebo Tiny. Nahrávky sa nikam neodosielajú. Potom môžete používať režim Iba offline.\n\nVýsledky sa ukladajú do TXT a SRT. Zastavenie počká na aktuálny krok a zachová rozpracovaný text.')).pack(side='right', padx=8)
 
+    workspace = ttk.Notebook(outer)
+    workspace.pack(fill='both', expand=True)
+    app.workspace_tabs = workspace
+    processing = ttk.Frame(workspace, padding=(0, 8, 0, 0))
+    workspace.add(processing, text='Fronta a spracovanie')
+    log_page = ttk.Frame(workspace, padding=(0, 8, 0, 0))
+    workspace.add(log_page, text='Náhľad a správy')
+
     def card():
-        frame = ttk.Frame(outer, style='Panel.TFrame', padding=10)
+        frame = ttk.Frame(processing, style='Panel.TFrame', padding=10)
         frame.pack(fill='x', pady=(0, 8))
         return frame
 
     files = card()
+    files.pack_configure(fill='both', expand=True)
     toolbar = ttk.Frame(files, style='Card.TFrame')
     toolbar.pack(fill='x')
     app.add = ttk.Button(toolbar, text='＋  Pridať nahrávky', style='Accent.TButton', command=app.add_files)
     app.add.pack(side='left')
     app.remove = ttk.Button(toolbar, text='Odobrať vybrané', command=app.remove_files)
     app.remove.pack(side='left', padx=10)
+    ttk.Button(toolbar, text='↑', width=3, command=lambda: app.move_item(-1)).pack(side='left')
+    ttk.Button(toolbar, text='↓', width=3, command=lambda: app.move_item(1)).pack(side='left', padx=3)
+    ttk.Button(toolbar, text='Editor výsledku', command=app.open_editor).pack(side='left', padx=6)
+    ttk.Button(toolbar, text='Modely', command=app.manage_models).pack(side='left')
     app.file_count = tk.StringVar(value='0 nahrávok')
     ttk.Label(toolbar, textvariable=app.file_count, style='CardMuted.TLabel').pack(side='right')
     area = ttk.Frame(files, style='Field.TFrame', padding=1)
-    area.pack(fill='x', pady=(12, 0))
+    area.pack(fill='both', expand=True, pady=(12, 0))
     app.file_area = area
-    app.listbox = tk.Listbox(area, selectmode='extended', height=3, font=(app.font, 10), relief='flat', bd=0, highlightthickness=0, activestyle='none')
+    app.listbox = tk.Listbox(area, selectmode='extended', height=2, font=(app.font, 10), relief='flat', bd=0, highlightthickness=0, activestyle='none')
+    app.listbox.bind('<Double-Button-1>', lambda event: app.open_editor())
     app.empty = ttk.Frame(area, style='Field.TFrame', padding=5)
     app.empty.pack(fill='both', expand=True)
     ttk.Label(app.empty, text='Pridajte zvukové súbory', style='Empty.TLabel').pack(pady=(5, 5))
-    ttk.Label(app.empty, text='Kliknite na „Pridať nahrávky“', style='FieldMuted.TLabel').pack()
+    ttk.Label(app.empty, text='Pretiahnite súbory do okna alebo kliknite na „Pridať nahrávky“', style='FieldMuted.TLabel').pack()
 
 
     options = card()
@@ -98,35 +112,47 @@ def build_ui(app, root, languages, models, output, cache):
     app.browse = ttk.Button(path, text='Vybrať…', command=app.choose_folder)
     app.browse.pack(side='left', padx=(10, 0))
 
-    actions = ttk.Frame(outer)
+    actions = ttk.Frame(processing)
     actions.pack(fill='x', pady=(0, 8))
     app.start_button = ttk.Button(actions, text='▶  Spustiť prepis', style='Accent.TButton', command=app.start)
     app.start_button.pack(side='left')
     app.stop_button = ttk.Button(actions, text='■  Zastaviť', command=app.cancel, state='disabled')
     app.stop_button.pack(side='left', padx=10)
+    ttk.Button(actions, text='Opakovať / pokračovať', command=lambda: app.start('retry')).pack(side='left')
+    ttk.Button(actions, text='Nový od začiatku', command=lambda: app.start('new')).pack(side='left', padx=6)
     ttk.Button(actions, text='Otvoriť výsledky', command=app.open_results).pack(side='right')
     status = card()
-    ttk.Label(status, text='Stav', style='CardBold.TLabel').pack(anchor='w')
     app.status = tk.StringVar(value='Pridajte nahrávky a spustite prepis.')
-    ttk.Label(status, textvariable=app.status, style='CardMuted.TLabel', wraplength=950).pack(anchor='w', pady=(5, 9))
+    ttk.Label(status, textvariable=app.status, style='CardMuted.TLabel', wraplength=1400).pack(anchor='w', pady=(2, 4))
     progress_row = ttk.Frame(status, style='Card.TFrame')
     progress_row.pack(fill='x')
     app.progress = ttk.Progressbar(progress_row, maximum=100)
     app.progress.pack(side='left', fill='x', expand=True)
     app.percent = tk.StringVar(value='0 %')
     ttk.Label(progress_row, textvariable=app.percent, style='CardMuted.TLabel', width=6, anchor='e').pack(side='right', padx=(10, 0))
+    app.batch_progress = ttk.Progressbar(status, maximum=100)
+    app.batch_progress.pack(fill='x', pady=(6, 0))
+    app.timing = tk.StringVar(value='Dávka: 0 % • Odhad času sa zobrazí po začiatku prepisu.')
+    details = ttk.Frame(status, style='Card.TFrame')
+    details.pack(fill='x')
+    app.timing_label = ttk.Label(details, textvariable=app.timing, style='CardMuted.TLabel')
+    app.timing_label.pack(side='left')
+    app.device_status = tk.StringVar(value='Zariadenie: čaká na načítanie modelu')
+    app.device_label = ttk.Label(details, textvariable=app.device_status, style='CardMuted.TLabel')
+    app.device_label.pack(side='right')
 
-    logs = ttk.Frame(outer, style='Panel.TFrame', padding=10)
+    logs = ttk.Frame(log_page, style='Panel.TFrame', padding=10)
     logs.pack(fill='both', expand=True)
     log_toolbar = ttk.Frame(logs, style='Card.TFrame')
     log_toolbar.pack(fill='x', pady=(0, 6))
     ttk.Label(log_toolbar, text='Výsledky prepisu', style='CardBold.TLabel').pack(side='left')
     app.clear_button = ttk.Button(log_toolbar, text='Vymazať záznam', command=lambda: clear_logs(app))
     app.clear_button.pack(side='right')
+    ttk.Button(log_toolbar, text='Predvolené nastavenia', command=app.reset_settings).pack(side='right', padx=6)
     tabs = ttk.Notebook(logs)
     app.result_tabs = tabs
     tabs.pack(fill='both', expand=True)
-    for label, attr in [('Výsledky a záznamy', 'preview'), ('Priebeh', 'activity')]:
+    for label, attr in [('Prepis — náhľad', 'preview'), ('Prevádzkové správy', 'activity')]:
         panel = ttk.Frame(tabs, style='Field.TFrame')
         tabs.add(panel, text=label)
         text = tk.Text(panel, wrap='word', height=4, font=(app.font, 10), state='disabled', relief='flat', padx=12, pady=10, highlightthickness=0)
@@ -141,7 +167,10 @@ def build_ui(app, root, languages, models, output, cache):
     root.bind('<Map>', lambda event: root.after_idle(lambda: titlebar(root, app.theme == 'dark', PALETTES[app.theme]['bg'], PALETTES[app.theme]['text'])) if event.widget == root else None, add='+')
     root.update_idletasks()
     # Minimálna veľkosť odvodená od skutočných metrík písma a ovládania.
-    root.minsize(outer.winfo_reqwidth(), outer.winfo_reqheight() + footer.winfo_reqheight())
+    root.minsize(min(root.winfo_screenwidth()-40, outer.winfo_reqwidth()),
+                 min(root.winfo_screenheight()-80, outer.winfo_reqheight() + footer.winfo_reqheight()))
+    minimum_width, minimum_height = root.minsize()
+    root.geometry(f'{minimum_width}x{minimum_height}+20+20')
     root.protocol('WM_DELETE_WINDOW', app.close)
     root.after(100, app.poll)
 
@@ -189,6 +218,9 @@ def apply_theme(app, theme):
     s.configure('Horizontal.TProgressbar', background=p['blue'], troughcolor=p['field'], borderwidth=0, thickness=10)
     s.configure('TNotebook', background=p['card'], borderwidth=0)
     s.configure('TNotebook.Tab', background=p['card'], foreground=p['muted'], padding=(14, 8))
+    s.configure('Treeview', background=p['field'], fieldbackground=p['field'], foreground=p['text'], rowheight=round(24 * app.root.winfo_fpixels('1i') / 96))
+    s.configure('Treeview.Heading', background=p['card'], foreground=p['text'])
+    s.map('Treeview', background=[('selected', p['blue'])], foreground=[('selected', 'white')])
     s.map('TNotebook.Tab', background=[('selected', p['field'])], foreground=[('selected', p['blue'])])
     app.root.option_add('*TCombobox*Listbox.background', p['field'])
     app.root.option_add('*TCombobox*Listbox.foreground', p['text'])
@@ -198,4 +230,9 @@ def apply_theme(app, theme):
     app.theme_button.configure(text='Svetlý režim' if theme == 'dark' else 'Tmavý režim')
     rounded_styles(app, p)
     app.root.after_idle(lambda: titlebar(app.root, app.theme == 'dark', PALETTES[app.theme]['bg'], PALETTES[app.theme]['text']))
+    for editor in getattr(app, 'editors', []):
+        if editor.window.winfo_exists():
+            editor.apply_theme()
+    if hasattr(app, 'persist_timer'):
+        app.schedule_save()
 

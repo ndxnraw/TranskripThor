@@ -1,5 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 from pathlib import Path
+from importlib.util import find_spec
 import sys
 sys.path.insert(0, SPECPATH)
 from check_runtime import check
@@ -12,6 +13,12 @@ datas = [(str(Path(SPECPATH) / 'assets'), 'assets')]
 binaries = []
 hiddenimports = []
 datas += collect_data_files('certifi')
+datas += collect_data_files('tkinterdnd2')
+if find_spec('kaldi_native_fbank'):
+    optional_data, optional_bins, optional_imports = collect_all('kaldi_native_fbank')
+    datas += optional_data
+    binaries += optional_bins
+    hiddenimports += optional_imports
 datas += copy_metadata('tqdm')
 datas += copy_metadata('huggingface-hub')
 tmp_ret = collect_all('faster_whisper')

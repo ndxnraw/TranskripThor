@@ -1,0 +1,2 @@
+# Optional voice clustering. onnxruntime is already provided by faster-whisper.
+kaldi-native-fbank==1.22.3

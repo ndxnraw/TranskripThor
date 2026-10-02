@@ -1,0 +1,15 @@
+{
+  "recordings": [],
+  "example_recording_do_not_measure": {
+    "id": "cz-sk-dialog-01",
+    "audio": "audio/cz-sk-dialog-01.wav",
+    "kind": "real",
+    "authorized": false,
+    "reviewed_by": "",
+    "tags": ["switching", "short_answers", "noise", "names", "mid_sentence"],
+    "segments": [
+      {"start": 0.0, "end": 2.5, "text": "Zítra to pošleme do skladu.", "language": "cs"},
+      {"start": 3.0, "end": 5.5, "text": "Dobre, potom to naskladním.", "language": "sk"}
+    ]
+  }
+}

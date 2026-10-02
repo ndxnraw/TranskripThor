@@ -131,8 +131,11 @@ class ModelsTest(unittest.TestCase):
             {'text': ' Skúška.', 'timestamp': (1.4, 2.0)}]})
         with patch.dict(sys.modules, torch=SimpleNamespace(inference_mode=nullcontext)):
             result = adapter.infer([0.] * (3 * sm.SAMPLE_RATE))
-        self.assertEqual(result, [dict(text='Dobrý deň.', start=0.1, end=1.2),
+        self.assertEqual([{k:v for k,v in item.items() if k != 'words'} for item in result], [dict(text='Dobrý deň.', start=0.1, end=1.2),
                                   dict(text='Skúška.', start=1.4, end=2.0)])
+        aligned = sm.checked_segments(result, 10, 3)
+        self.assertEqual(aligned[0].words[0].word.strip(), 'Dobrý')
+        self.assertEqual(aligned[0].words[0].start, 10.1)
         self.assertEqual(adapter.pipe.call_args.kwargs['return_timestamps'], 'word')
 
 if __name__ == '__main__':

@@ -12,13 +12,18 @@ from speech_models import SLOVAK_MODEL
 
 class InterfaceTest(unittest.TestCase):
     def setUp(self):
+        self.state = tempfile.TemporaryDirectory()
         self.root = tk.Tk()
         self.root.withdraw()
-        self.app = prepis.App(self.root)
+        self.app = prepis.App(self.root, self.state.name)
         self.app.files = ['recording.wav']
 
     def tearDown(self):
+        self.root.update_idletasks()
+        for identifier in self.root.tk.splitlist(self.root.tk.call('after', 'info')):
+            self.root.after_cancel(identifier)
         self.root.destroy()
+        self.state.cleanup()
 
     @patch('prepis.threading.Thread')
     def test_hungarian_uses_selected_multilingual_model(self, thread):
@@ -26,6 +31,12 @@ class InterfaceTest(unittest.TestCase):
         self.app.language.set('Maďarčina')
         self.app.start()
         self.assertEqual(thread.call_args.kwargs['args'][2:4], ('hu', 'small'))
+
+    @patch('prepis.threading.Thread')
+    def test_mixed_mode_uses_selected_model(self, thread):
+        self.app.language.set('Čeština + slovenčina')
+        self.app.start()
+        self.assertEqual(thread.call_args.kwargs['args'][2:4], ('cs-sk', 'small'))
 
     @patch('prepis.threading.Thread')
     def test_slovak_does_not_force_kinit(self, thread):
@@ -47,6 +58,21 @@ class InterfaceTest(unittest.TestCase):
 
 
 class ExportTest(unittest.TestCase):
+    @patch('prepis.transcribe_mixed')
+    def test_mixed_export_keeps_languages_and_timestamps(self, mixed):
+        mixed.return_value = (iter([SimpleNamespace(text='Zítra.', start=0, end=2),
+            SimpleNamespace(text='Dobre.', start=127.5, end=131.1)]),
+            SimpleNamespace(language='cs-sk', duration=140))
+        model = Mock()
+        with tempfile.TemporaryDirectory() as folder:
+            target, complete = prepis.transcribe_file(model, 'audio.wav', folder, 'cs-sk',
+                                                      threading.Event(), Mock())
+            self.assertTrue(complete)
+            self.assertEqual((target / 'prepis.txt').read_text(encoding='utf-8-sig'), 'Zítra.\nDobre.\n')
+            self.assertIn('00:02:07,500 --> 00:02:11,100',
+                          (target / 'titulky.srt').read_text(encoding='utf-8-sig'))
+        model.transcribe.assert_not_called()
+
     def test_decode_failure_preserves_partial_output(self):
         def segments():
             yield SimpleNamespace(text='Prvá veta.', start=0, end=1)

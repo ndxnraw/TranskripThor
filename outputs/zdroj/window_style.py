@@ -3,6 +3,8 @@ import sys
 import ctypes
 
 def titlebar(root, dark, background, foreground):
+    # Tk owns client-area painting. Do not toggle WS_EX_COMPOSITED on resize:
+    # it invalidates Tk's cached child surfaces and clips text/images on restore.
     if sys.platform != 'win32':
         return None
     from ctypes import wintypes
@@ -16,6 +18,10 @@ def titlebar(root, dark, background, foreground):
     set_attr = ctypes.windll.dwmapi.DwmSetWindowAttribute
     set_attr.argtypes = [wintypes.HWND, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD]
     set_attr.restype = ctypes.c_long
+    # DWM's restore animation can sample Tk before its children finish painting.
+    # Disable that animation only for this window, never globally in Windows.
+    no_transition = ctypes.c_int(1)
+    set_attr(hwnd, 3, ctypes.byref(no_transition), ctypes.sizeof(no_transition))
     enabled = ctypes.c_int(int(dark))
     result = set_attr(hwnd, 20, ctypes.byref(enabled), ctypes.sizeof(enabled))
     if result != 0:
@@ -41,7 +47,7 @@ def rounded_styles(app, palette):
                 draw = ImageDraw.Draw(im)
                 draw.rounded_rectangle((1, 1, 62, 62), radius=15, fill=fill, outline=border, width=2)
                 im = im.resize((32, 32), Image.Resampling.LANCZOS)
-                photo = ImageTk.PhotoImage(im)
+                photo = ImageTk.PhotoImage(im, master=app.root)
                 app.round_images.append(photo)
                 return photo
             for name, fill in [('Button', p['field']), ('Accent', p['blue']), ('Entry', p['field'])]:
@@ -57,4 +63,3 @@ def rounded_styles(app, palette):
     # Veľké panely vykresľuje Tk natívne; bez dlaždicovania alfa obrázkov.
     s.layout('Panel.TFrame', [('Frame.border', {'sticky': 'nsew'})])
     s.configure('Panel.TFrame', background=palette['card'], relief='flat', borderwidth=0)
-

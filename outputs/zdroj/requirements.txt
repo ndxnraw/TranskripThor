@@ -1,3 +1,5 @@
 faster-whisper==1.2.1
 Pillow>=11,<13
+sounddevice==0.5.3
+tkinterdnd2==0.4.3
 -r requirements-models.txt

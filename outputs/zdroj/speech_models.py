@@ -56,7 +56,10 @@ def checked_segments(items, offset, duration):
             raise RuntimeError('Model vrátil neplatné časové značky.')
         start, end = min(start, duration), min(end, duration)
         last = start
-        result.append(SimpleNamespace(start=offset + start, end=offset + end, text=text))
+        words = checked_segments(item.get('words', []), offset, duration)
+        for word in words:
+            word.word = word.text
+        result.append(SimpleNamespace(start=offset + start, end=offset + end, text=text, words=words))
     return result
 
 class LocalAdapter:
@@ -151,10 +154,11 @@ class SlovakWhisper(LocalAdapter):
                 continue
             if not segments or segments[-1]['text'].endswith(('.', '?', '!')) or \
                     word['end'] - segments[-1]['start'] > 7:
-                segments.append(dict(text=text, start=word['start'], end=word['end']))
+                segments.append(dict(text=text, start=word['start'], end=word['end'], words=[word]))
             else:
                 segments[-1]['text'] += ' ' + text
                 segments[-1]['end'] = word['end']
+                segments[-1]['words'].append(word)
         return segments
 
 def load_backend(model_id, cache, offline, selected_device, emit, stop):
@@ -193,7 +197,7 @@ class ModelManager:
         selected = device(requested)
         for target in ([selected, 'cpu'] if selected == 'cuda' else ['cpu']):
             try:
-                emit('status', f'Načítavam {requested} ({target})… Pri prvom použití sa model sťahuje.')
+                emit('status', f'Načítavam model {requested} ({target}) do pamäte…')
                 model = load_backend(requested, cache, offline, target, emit, stop)
                 if stop.is_set():
                     if isinstance(model, LocalAdapter):

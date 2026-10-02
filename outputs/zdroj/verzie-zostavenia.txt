@@ -9,6 +9,9 @@ colorama==0.4.6
 cryptography==50.0.1
 ctranslate2==4.8.2
 faster-whisper==1.2.1
+sounddevice==0.5.3
+tkinterdnd2==0.4.3
+kaldi-native-fbank==1.22.3
 filelock==4.0.7
 fsspec==2026.9.0
 hf-xet==1.6.0
