@@ -107,8 +107,11 @@ class App:
         build_ui(self, root, LANGUAGES, MODELS, Path.home() / 'Documents' / 'Prepisy', Path(os.environ.get('LOCALAPPDATA', str(Path.home()))) / 'LokalnyPrepis' / 'models')
         self.restore_settings()
         self.refresh_queue()
-        for variable in (self.language, self.quality, self.output, self.offline):
+        for variable in (self.language, self.quality, self.output, self.offline, self.autoplay):
             variable.trace_add('write', lambda *_: self.schedule_save())
+        for variable in (self.language, self.quality, self.offline):
+            variable.trace_add('write', lambda *_: self.update_readiness())
+        self.update_readiness()
         root.bind('<Configure>', lambda event: self.schedule_save() if event.widget == root else None, add='+')
         try:
             from tkinterdnd2 import TkinterDnD, DND_FILES
@@ -137,6 +140,7 @@ class App:
         self.quality.set(settings.get('model', next(iter(MODELS))))
         self.output.set(settings.get('output', str(Path.home() / 'Documents' / 'Prepisy')))
         self.offline.set(settings.get('offline', False))
+        self.autoplay.set(settings.get('autoplay', False))
         apply_theme(self, settings.get('theme', 'dark'))
         # Start at the existing DPI-aware minimum, regardless of saved geometry.
 
@@ -149,7 +153,7 @@ class App:
         self.persist_timer = None
         try:
             self.store.save('settings.json', dict(language=self.language.get(), model=self.quality.get(),
-                output=self.output.get(), theme=self.theme, offline=self.offline.get(), geometry=self.root.geometry()))
+                output=self.output.get(), theme=self.theme, offline=self.offline.get(), autoplay=self.autoplay.get(), geometry=self.root.geometry()))
             self.store.save('queue.json', self.items)
             return True
         except OSError as exc:
@@ -164,21 +168,90 @@ class App:
         self.quality.set(next(iter(MODELS)))
         self.output.set(str(Path.home() / 'Documents' / 'Prepisy'))
         self.offline.set(False)
+        self.autoplay.set(False)
         width, height = self.root.minsize()
         self.root.geometry(f'{width}x{height}')
         apply_theme(self, 'dark')
         self.save_state()
 
     def refresh_queue(self):
-        selected = self.listbox.curselection()
-        self.listbox.delete(0, 'end')
-        for item in self.items:
-            self.listbox.insert('end', f'[{item["state"]}]  {Path(item["source"]).name}' +
-                                (f' — {item["error"]}' if item.get('error') else ''))
-        for index in selected:
-            if index < len(self.items):
-                self.listbox.selection_set(index)
+        self.listbox.set_items(self.items)
         update_files(self)
+        self.update_selection()
+
+    def update_selection(self):
+        selected = self.listbox.curselection()
+        item = self.items[selected[0]] if len(selected) == 1 else None
+        idle = not self.busy
+        label = 'Otvoriť prepis'
+        actionable = bool(item and item.get('project'))
+        if item and item['state'] in ('prerušené', 'chyba'):
+            label, actionable = ('Pokračovať' if item.get('project') else 'Skúsiť znova'), True
+        self.context_button.configure(text=label, state='normal' if idle and actionable else 'disabled')
+        self.editor_button.configure(state='normal' if idle and item and item.get('project') else 'disabled')
+        self.info_button.configure(state='normal' if item else 'disabled')
+        for button in (self.remove, self.new_button):
+            button.configure(state='normal' if idle and selected else 'disabled')
+        for button, direction in ((self.move_up, -1), (self.move_down, 1)):
+            target = selected[0]+direction if item else -1
+            movable = item and item['state'] == 'čaká' and 0 <= target < len(self.items) and self.items[target]['state'] == 'čaká'
+            button.configure(state='normal' if idle and movable else 'disabled')
+        if item:
+            detail = item['source']
+            if item.get('error'):
+                detail += '\nChyba: ' + item['error']
+            elif item['state'] == 'prerušené':
+                detail += '\nPokračovanie použije nastavenia uloženého projektu.'
+            # Keep the queue usable even for lengthy backend errors; full details remain accessible.
+            self.selection_info.set(detail[:260] + ('…' if len(detail) > 260 else ''))
+        else:
+            self.selection_info.set(f'Vybrané nahrávky: {len(selected)}' if selected else 'Vyberte nahrávku pre ďalšie možnosti.')
+
+    def context_action(self):
+        if self.busy:
+            return
+        selected = self.listbox.curselection()
+        if len(selected) != 1:
+            return
+        item = self.items[selected[0]]
+        if item['state'] in ('prerušené', 'chyba'):
+            self.start('retry', identifiers=[item['id']])
+        elif item.get('project'):
+            self.open_editor()
+
+    def show_item_info(self):
+        selected = self.listbox.curselection()
+        if len(selected) != 1:
+            return
+        item = self.items[selected[0]]
+        text = item['source'] + '\n\nStav: ' + item['state']
+        if item.get('project'):
+            text += '\nProjekt: ' + item['project']
+            try:
+                with Project(item['project']) as project:
+                    settings = project.get('settings', {})
+                text += f'\nUložený model: {settings.get("model", "—")}\nUložený jazyk: {settings.get("language") or "automaticky"}'
+            except Exception as exc:
+                text += '\nProjekt sa nedá načítať: ' + str(exc)
+        if item.get('error'):
+            text += '\n\nChyba: ' + item['error'] + '\n\nSkontrolujte súbor, model a voľné miesto. Pri nezhode projektu použite Nový prepis.'
+        messagebox.showinfo('Podrobnosti nahrávky', text, parent=self.root)
+
+    def page_changed(self, _event=None):
+        if self.workspace_tabs.select() == str(self.models_page):
+            self.manage_models()
+
+    def update_readiness(self):
+        from model_catalog import cached_path
+        try:
+            model = MODELS[self.quality.get()]
+            route(LANGUAGES[self.language.get()], model)
+            available = cached_path(self.cache, model) is not None
+            self.readiness.set('Model je pripravený lokálne.' if available else
+                'Model chýba. V režime offline ho nemožno stiahnuť; otvorte kartu Modely.' if self.offline.get() else
+                'Model sa pri prvom použití stiahne. Zvuk ani prepis sa neodosielajú.')
+        except (KeyError, ValueError, OSError) as exc:
+            self.readiness.set(str(exc))
 
     def accept_files(self, paths):
         if self.busy:
@@ -230,9 +303,14 @@ class App:
         try:
             for editor in self.editors:
                 if editor.window.winfo_exists() and editor.folder == item['project']:
-                    editor.window.lift()
+                    self.workspace_tabs.select(self.editor_page)
                     return
-            self.editors.append(Editor(self, item['project']))
+            for editor in self.editors:
+                if editor.window.winfo_exists() and not editor.close():
+                    return
+            self.editor_empty.pack_forget()
+            self.editors.append(Editor(self, item['project'], parent=self.editor_page))
+            self.workspace_tabs.select(self.editor_page)
         except Exception as exc:
             messagebox.showerror('Editor', str(exc))
 
@@ -243,10 +321,9 @@ class App:
             messagebox.showinfo('Správca modelov', 'Počkajte na dokončenie rozlíšenia hlasov.')
             return
         if self.model_dialog and self.model_dialog.window.winfo_exists():
-            self.model_dialog.window.lift()
             return
         from model_dialog import ModelDialog
-        self.model_dialog = ModelDialog(self)
+        self.model_dialog = ModelDialog(self, parent=self.models_page)
 
     def choose_folder(self):
         folder = filedialog.askdirectory()
@@ -261,11 +338,11 @@ class App:
         else:
             messagebox.showinfo('Výsledky', 'Výstupný priečinok ešte neexistuje.')
 
-    def start(self, mode='pending'):
+    def start(self, mode='pending', identifiers=None):
         if self.busy:
             return
-        if self.model_dialog and self.model_dialog.window.winfo_exists():
-            messagebox.showinfo('Správca modelov', 'Pred spustením zatvorte Správcu modelov.')
+        if self.model_dialog and self.model_dialog.window.winfo_exists() and self.model_dialog.busy:
+            messagebox.showinfo('Správca modelov', 'Počkajte na dokončenie práce s modelmi.')
             return
         for editor in self.editors:
             if editor.window.winfo_exists() and not editor.close():
@@ -273,18 +350,33 @@ class App:
         self.batch_mode = mode
         states = ('čaká',) if mode == 'pending' else ('prerušené', 'chyba')
         chosen = list(self.listbox.curselection())
-        selected_items = [self.items[i] for i in chosen] if mode == 'new' and chosen else self.items
+        selected_items = [self.items[i] for i in chosen] if mode == 'new' else self.items
+        if identifiers is not None:
+            selected_items = [item for item in selected_items if item['id'] in identifiers]
         selected_items = [item for item in selected_items if mode == 'new' or item['state'] in states]
         self.batch_ids = [item['id'] for item in selected_items]
         if not selected_items or not self.output.get().strip():
             messagebox.showinfo('Prepis', 'Nie sú vybrané vhodné položky. Pridajte nahrávku, použite Opakovať alebo Nový od začiatku.')
             return
+        language, model = LANGUAGES[self.language.get()], MODELS[self.quality.get()]
+        self.resume_settings = None
         try:
-            route(LANGUAGES[self.language.get()], MODELS[self.quality.get()])
-        except (KeyError, ValueError) as exc:
+            if identifiers is not None and len(selected_items) == 1 and selected_items[0].get('project'):
+                with Project(selected_items[0]['project']) as project:
+                    self.resume_settings = project.get('settings')
+                if self.resume_settings:
+                    language, model = self.resume_settings['language'], self.resume_settings['model']
+            route(language, model)
+            from model_catalog import cached_path
+            if self.offline.get() and cached_path(self.cache, model) is None:
+                messagebox.showinfo('Model nie je dostupný', 'Vybraný model nie je uložený v počítači. Na karte Modely ho stiahnite po vypnutí režimu Iba offline.')
+                self.workspace_tabs.select(self.models_page)
+                return
+        except Exception as exc:
             messagebox.showinfo('Výber modelu', str(exc))
             return
         self.busy = True
+        self.update_selection()
         self.stop.clear()
         for widget in (self.add, self.remove, self.lang_box, self.model_box, self.browse, self.output_entry, self.offline_box, self.start_button):
             widget.configure(state='disabled')
@@ -294,7 +386,7 @@ class App:
         self.clock = ProgressClock(time.monotonic())
         self.batch_index = self.file_progress = 0
         self.save_state()
-        args = ([item['source'] for item in selected_items], self.output.get(), LANGUAGES[self.language.get()], MODELS[self.quality.get()], self.offline.get())
+        args = ([item['source'] for item in selected_items], self.output.get(), language, model, self.offline.get())
         threading.Thread(target=self.work, args=args, daemon=True).start()
 
     def cancel(self):
@@ -344,7 +436,7 @@ class App:
                     if not target:
                         target = str(reserve_output(folder, Path(file).stem))
                     update(identifier, state='spracúva sa', project=str(target), error='')
-                    settings = job_settings(model_name, language)
+                    settings = dict(self.resume_settings) if getattr(self, 'resume_settings', None) else job_settings(model_name, language)
                     settings['model_revision'] = revision
                     complete = transcribe_job(self.model, file, target, settings,
                                               self.stop, emit, resume=resume)
@@ -457,6 +549,8 @@ class App:
             self.lang_box.configure(state='readonly')
             self.model_box.configure(state='readonly')
             self.stop_button.configure(state='disabled')
+            self.update_selection()
+            self.update_readiness()
         for error in errors:
             messagebox.showerror('Chyba prepisu', error)
         self.root.after(50 if self.busy or not self.events.empty() else 250, self.poll)

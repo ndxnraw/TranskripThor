@@ -100,6 +100,7 @@ def transcribe_job(model, source, target, settings, stop, emit, resume=False):
             for segment in saved:
                 emit('segment', segment)
             emit('progress', min(99, end / max(1, len(audio)) * 100))
+        emit('status', 'Ukladám dokončený prepis a titulky…')
         project.finish()
         for warning in project.export():
             emit('log', warning)

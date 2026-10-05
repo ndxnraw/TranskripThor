@@ -52,7 +52,7 @@ def rounded_styles(app, palette):
                 return photo
             for name, fill in [('Button', p['field']), ('Accent', p['blue']), ('Entry', p['field'])]:
                 normal = tile(fill, p['border'] if name != 'Accent' else p['blue'])
-                active = tile(p['info'] if name != 'Accent' else '#1568ce', p['blue'])
+                active = tile(p['info'] if name != 'Accent' else p['blue'], p['blue'])
                 disabled = tile(p['disabled'], p['border'])
                 s.element_create(f'{theme}.{name}.round', 'image', normal, ('disabled', disabled), ('active', active), border=6, sticky='nsew')
     theme = app.theme

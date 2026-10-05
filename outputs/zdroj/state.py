@@ -53,8 +53,9 @@ class StateStore:
         for key, choices in [('language', languages), ('model', models), ('theme', ('light', 'dark'))]:
             if isinstance(raw.get(key), str) and raw[key] in choices:
                 result[key] = raw[key]
-        if isinstance(raw.get('offline'), bool):
-            result['offline'] = raw['offline']
+        for key in ('offline', 'autoplay'):
+            if isinstance(raw.get(key), bool):
+                result[key] = raw[key]
         if isinstance(raw.get('output'), str) and raw['output'].strip():
             result['output'] = raw['output']
         if isinstance(raw.get('geometry'), str) and re.fullmatch(r'\d{3,5}x\d{3,5}(?:[+-]\d+[+-]\d+)?', raw['geometry']):
