@@ -96,6 +96,18 @@ class StudioTest(unittest.TestCase):
         self.app.reset_settings()
         self.assertFalse(self.app.autoplay.get())
 
+    def test_download_indicator_does_not_change_transcription_progress(self):
+        self.app.events.put(('download_state', True))
+        self.app.events.put(('status', 'Sťahujem model: cache rastie'))
+        self.app.poll()
+        self.assertEqual(str(self.app.progress['mode']), 'indeterminate')
+        self.assertEqual(self.app.percent.get(), '…')
+        self.assertEqual(self.app.file_progress, 0)
+        self.app.events.put(('download_state', False))
+        self.app.poll()
+        self.assertEqual(str(self.app.progress['mode']), 'determinate')
+        self.assertEqual(self.app.percent.get(), '0 %')
+
     @patch('editor.Editor.load_audio')
     def test_inline_edits_paging_search_theme_and_explicit_playback(self, _load):
         editor = Editor(self.app, self.project(), parent=self.app.editor_page)

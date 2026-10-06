@@ -1,4 +1,6 @@
-# ND TranskripThor 2.1.0
+# ND TranskripThor 2.1.2.bugfix
+
+Oprava sťahovania, aktuálne výsledky overenia a známe obmedzenia: [verzia 2.1.2.bugfix](OPRAVA-2.1.2.md).
 
 Aktualizácia rozhrania podľa návrhu Studio, pri zachovaní lokálneho prepisu.
 Samostatné karty **Nahrávky, Editor, Modely, Nastavenia a Podrobnosti spracovania**
@@ -15,8 +17,8 @@ na stiahnutie vybraných modelov. Po stiahnutí je dostupný režim Iba offline.
 Rozbaľte celý Windows ZIP a spustite **ND TranskripThor.exe**. Priečinok
 `_internal` musí zostať vedľa EXE. Python netreba inštalovať. Modely nie sú
 pribalené. Lokálna zostava tejto verzie je v `outputs/release210/ND TranskripThor`.
-[Windows ZIP 2.1.0](https://github.com/ndxnraw/TranskripThor/releases/download/v2.1.0/ND-TranskripThor-2.1.0-Windows.zip)
-· [Poznámky k vydaniu](https://github.com/ndxnraw/TranskripThor/releases/tag/v2.1.0)
+[Windows ZIP 2.1.2.bugfix](https://github.com/ndxnraw/TranskripThor/releases/download/v2.1.2.bugfix/ND-TranskripThor-2.1.2.bugfix-Windows.zip)
+· [Poznámky k vydaniu](https://github.com/ndxnraw/TranskripThor/releases/tag/v2.1.2.bugfix)
 
 ## Funkcie
 

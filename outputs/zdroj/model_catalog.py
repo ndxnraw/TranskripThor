@@ -27,20 +27,43 @@ def cache_folder(cache, model):
     return base / ('models--' + repo.replace('/', '--'))
 
 
-def complete_snapshot(path, model):
-    if model == SPEAKER_MODEL:
-        return (path / 'voxceleb_resnet34_LM.onnx').is_file()
-    required = ['config.json', 'tokenizer.json']
-    if model == SLOVAK_MODEL:
-        required += ['preprocessor_config.json']
-        if not (path / 'model.safetensors').is_file():
-            try:
-                required += list(set(json.loads((path / 'model.safetensors.index.json').read_text())['weight_map'].values()))
-            except (OSError, ValueError, KeyError):
+def complete_snapshot(path, model, verify_receipt=True):
+    try:
+        required = ['voxceleb_resnet34_LM.onnx'] if model == SPEAKER_MODEL else ['config.json', 'tokenizer.json']
+        if model == SLOVAK_MODEL:
+            required += ['preprocessor_config.json']
+            if (path/'model.safetensors').is_file():
+                required += ['model.safetensors']
+            else:
+                index=json.loads((path/'model.safetensors.index.json').read_text(encoding='utf-8'))
+                shards=set(index['weight_map'].values())
+                if not shards:
+                    return False
+                required += ['model.safetensors.index.json'] + list(shards)
+        elif model != SPEAKER_MODEL:
+            required += ['model.bin']
+        for name in required:
+            from download_worker import checked_name
+            checked_name(name)
+            file=path/name
+            if not file.is_file() or file.stat().st_size <= 0:
                 return False
-    else:
-        required += ['model.bin']
-    return all((path / name).is_file() and (path / name).stat().st_size > 0 for name in required)
+            if name.endswith('.json'):
+                if not isinstance(json.loads(file.read_text(encoding='utf-8')),dict):
+                    return False
+        receipt=path/'.nd-verified.json'
+        if verify_receipt and receipt.exists():
+            data=json.loads(receipt.read_text(encoding='utf-8'))
+            if not data.get('complete') or not set(required) <= data['files'].keys():
+                return False
+            for name, meta in data['files'].items():
+                checked_name(name)
+                stat=(path/name).stat()
+                if stat.st_size != meta['size'] or stat.st_mtime_ns != meta['mtime']:
+                    return False
+        return True
+    except (OSError,ValueError,KeyError,TypeError,AttributeError):
+        return False
 
 
 def cached_path(cache, model):
@@ -48,6 +71,8 @@ def cached_path(cache, model):
     _, _, revision = location(cache, model)
     ref = folder / 'refs' / revision
     commit = ref.read_text().strip() if ref.is_file() else revision
+    if not commit or '/' in commit or '\\' in commit or ':' in commit or commit in ('.','..'):
+        return None
     path = folder / 'snapshots' / commit
     return path if complete_snapshot(path, model) else None
 
@@ -70,30 +95,8 @@ def inventory(cache):
 
 
 def download(cache, model, emit, stop):
-    from huggingface_hub import snapshot_download
-    from tqdm.auto import tqdm
-    base, repo, revision = location(cache, model)
-    patterns = ['*.json', '*.safetensors', 'merges.txt', 'vocab.json'] if model == SLOVAK_MODEL else \
-        ['voxceleb_resnet34_LM.onnx', 'README.md'] if model == SPEAKER_MODEL else \
-        ['config.json', 'preprocessor_config.json', 'model.bin', 'tokenizer.json', 'vocabulary.*']
-    class DownloadProgress(tqdm):
-        def __init__(self, *args, **kwargs):
-            kwargs['disable'] = False
-            super().__init__(*args, **kwargs)
-        def display(self, *args, **kwargs):
-            if stop.is_set():
-                raise InterruptedError('Sťahovanie zastavené; už stiahnuté dáta zostávajú v cache.')
-            unit = 'súborov' if self.unit == 'it' else self.unit
-            emit('status', f'Sťahujem {model}: {self.n:g}/{self.total:g} {unit}' if self.total else f'Sťahujem {model}…')
-    if stop.is_set():
-        raise InterruptedError('Sťahovanie zastavené.')
-    emit('status', f'Sťahujem model {model}… Čakám na údaje servera.')
-    snapshot_download(repo, revision=revision, cache_dir=str(base), allow_patterns=patterns,
-                      tqdm_class=DownloadProgress, max_workers=2)
-    if stop.is_set():
-        raise InterruptedError('Sťahovanie zastavené.')
-    if not cached_path(cache, model):
-        raise RuntimeError('Model nie je úplný. Skúste sťahovanie zopakovať.')
+    from download_transport import supervise
+    supervise(cache, model, emit, stop)
 
 
 def ensure_model(cache, model, offline, emit, stop):

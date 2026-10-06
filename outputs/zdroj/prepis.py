@@ -478,7 +478,13 @@ class App:
                 kind, value = self.events.get_nowait()
             except queue.Empty:
                 break
-            if kind == 'status':
+            if kind == 'download_state':
+                self.progress.stop()
+                self.progress.configure(mode='indeterminate' if value else 'determinate', value=0)
+                self.percent.set('…' if value else '0 %')
+                if value:
+                    self.progress.start(20)
+            elif kind == 'status':
                 latest_status = value
             elif kind == 'progress':
                 latest_progress = value
@@ -541,6 +547,8 @@ class App:
                 widget.see('end')
             widget.configure(state='disabled')
         if finished:
+            self.progress.stop()
+            self.progress.configure(mode='determinate')
             self.busy = False
             self.clock = None
             self.save_state()
@@ -584,7 +592,21 @@ if __name__ == '__main__':
                                       backupCount=2, encoding='utf-8')
         logging.getLogger('mixed_language').addHandler(handler)
         logging.getLogger('mixed_language').setLevel(logging.DEBUG)
-    if len(sys.argv) == 5 and sys.argv[1] in ('--self-test', '--self-test-sk', '--self-test-hu', '--self-test-mixed', '--self-test-v2'):
+    if len(sys.argv) == 5 and sys.argv[1] == '--self-test-download':
+        import json
+        from model_catalog import download, cached_path
+        folder = Path(sys.argv[4])
+        folder.mkdir(parents=True, exist_ok=True)
+        records = []
+        try:
+            download(Path(sys.argv[3]), sys.argv[2], lambda kind, value: records.append((kind,value)), threading.Event())
+            if not cached_path(Path(sys.argv[3]), sys.argv[2]):
+                raise RuntimeError('Stiahnutý model nie je pripravený.')
+            (folder/'download.json').write_text(json.dumps(dict(status='PASS',events=records),ensure_ascii=False),encoding='utf-8')
+        except Exception as exc:
+            (folder/'download.json').write_text(json.dumps(dict(status='FAIL',error=str(exc),events=records),ensure_ascii=False),encoding='utf-8')
+            sys.exit(1)
+    elif len(sys.argv) == 5 and sys.argv[1] in ('--self-test', '--self-test-sk', '--self-test-hu', '--self-test-mixed', '--self-test-v2'):
         # Diagnostika zostaveného EXE: lokálny model, zvuk a výstupný priečinok.
         import traceback
         folder = Path(sys.argv[4])

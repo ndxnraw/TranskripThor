@@ -202,7 +202,7 @@ class OptionalAndModelTest(unittest.TestCase):
             (base/'refs').mkdir()
             (base/'refs'/'main').write_text('abc')
             for name in ['config.json','model.bin','tokenizer.json']:
-                (snapshot/name).write_bytes(b'test')
+                (snapshot/name).write_bytes(b'{}' if name.endswith('.json') else b'test')
             self.assertEqual(cached_path(folder,'small'),snapshot)
             remove_model(folder,'small')
             self.assertFalse(base.exists())

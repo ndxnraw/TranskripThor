@@ -49,6 +49,8 @@ class ModelDialog:
             button.pack(side='left', padx=4)
             self.buttons.append(button)
         ttk.Button(actions, text='Zastaviť sťahovanie', command=self.stop.set).pack(side='right')
+        self.progress = ttk.Progressbar(self.window, mode='indeterminate')
+        self.progress.pack(fill='x', padx=12, pady=(8, 0))
         self.status = tk.StringVar(value='Čítam lokálnu cache…')
         ttk.Label(self.window, textvariable=self.status, wraplength=850).pack(fill='x', padx=12, pady=12)
         self.refresh()
@@ -111,7 +113,11 @@ class ModelDialog:
             return
         while not self.events.empty():
             kind, value = self.events.get_nowait()
-            if kind == 'rows':
+            if kind == 'download_state':
+                self.progress.stop()
+                if value:
+                    self.progress.start(20)
+            elif kind == 'rows':
                 self.tree.delete(*self.tree.get_children())
                 from model_catalog import SPEAKER_MODEL
                 from prepis import MODELS
@@ -123,6 +129,7 @@ class ModelDialog:
                         'Dostupný' if row['available'] else 'Chýba/neúplný', f'{row["size"]/1024**2:.1f} MB'))
                 self.status.set('Lokálna dostupnosť overená. Sťahovanie neposiela nahrávky ani prepisy.')
             elif kind == 'done':
+                self.progress.stop()
                 self.busy = False
                 for button in self.buttons:
                     button.configure(state='normal')

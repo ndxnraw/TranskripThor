@@ -5,7 +5,7 @@ from PIL import Image, ImageTk
 from tkinter import ttk, messagebox
 from window_style import titlebar, rounded_styles
 
-VERSION = '2.1.0'
+VERSION = '2.1.2.bugfix'
 AUTHOR = 'Created by Daniel Návojský using Codex | 2026'
 PALETTES = {
     'dark': dict(bg='#11151d', card='#191f2a', field='#151b25', text='#eef2fa', muted='#b0bacb', border='#333e50', blue='#92b5ff', accent_text='#111d36', info='#263955', disabled='#30394a'),
