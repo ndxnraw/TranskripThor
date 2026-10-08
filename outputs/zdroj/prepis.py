@@ -11,7 +11,7 @@ enable_high_dpi()
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from ui import build_ui, update_files
-from speech_models import ModelManager, SLOVAK_MODEL, route
+from speech_models import ModelManager, SLOVAK_MODEL, route, DEVICES, GPUError
 from mixed_language import MIXED_LANGUAGE, transcribe_mixed
 from state import StateStore, queue_item, ProgressClock
 from jobs import job_settings, transcribe_job
@@ -107,19 +107,15 @@ class App:
         build_ui(self, root, LANGUAGES, MODELS, Path.home() / 'Documents' / 'Prepisy', Path(os.environ.get('LOCALAPPDATA', str(Path.home()))) / 'LokalnyPrepis' / 'models')
         self.restore_settings()
         self.refresh_queue()
-        for variable in (self.language, self.quality, self.output, self.offline, self.autoplay):
+        for variable in (self.language, self.quality, self.output, self.offline, self.autoplay, self.device_choice):
             variable.trace_add('write', lambda *_: self.schedule_save())
+        self.device_choice.trace_add('write', self.device_changed)
         for variable in (self.language, self.quality, self.offline):
             variable.trace_add('write', lambda *_: self.update_readiness())
         self.update_readiness()
         root.bind('<Configure>', lambda event: self.schedule_save() if event.widget == root else None, add='+')
-        try:
-            from tkinterdnd2 import TkinterDnD, DND_FILES
-            TkinterDnD._require(root)
-            root.drop_target_register(DND_FILES)
-            root.dnd_bind('<<Drop>>', lambda event: self.accept_files(root.tk.splitlist(event.data)))
-        except (ImportError, tk.TclError, AttributeError, RuntimeError) as exc:
-            self.events.put(('log', f'Pretiahnutie súborov nie je dostupné: {exc}. Použite Pridať nahrávky.'))
+        from file_drop import FileDrop
+        self.file_drop = FileDrop(self)
         if self.store.warning:
             self.events.put(('log', self.store.warning))
         if show_on_ready:
@@ -138,6 +134,7 @@ class App:
         settings = self.store.settings(LANGUAGES, MODELS)
         self.language.set(settings.get('language', 'Slovenčina'))
         self.quality.set(settings.get('model', next(iter(MODELS))))
+        self.device_choice.set(next(label for label, code in DEVICES.items() if code == settings.get('device', 'cpu')))
         self.output.set(settings.get('output', str(Path.home() / 'Documents' / 'Prepisy')))
         self.offline.set(settings.get('offline', False))
         self.autoplay.set(settings.get('autoplay', False))
@@ -153,6 +150,7 @@ class App:
         self.persist_timer = None
         try:
             self.store.save('settings.json', dict(language=self.language.get(), model=self.quality.get(),
+                device=DEVICES.get(self.device_choice.get(), 'cpu'),
                 output=self.output.get(), theme=self.theme, offline=self.offline.get(), autoplay=self.autoplay.get(), geometry=self.root.geometry()))
             self.store.save('queue.json', self.items)
             return True
@@ -166,6 +164,7 @@ class App:
         from ui import apply_theme
         self.language.set('Slovenčina')
         self.quality.set(next(iter(MODELS)))
+        self.device_choice.set(next(iter(DEVICES)))
         self.output.set(str(Path.home() / 'Documents' / 'Prepisy'))
         self.offline.set(False)
         self.autoplay.set(False)
@@ -255,12 +254,33 @@ class App:
 
     def accept_files(self, paths):
         if self.busy:
-            return
+            self.status.set('Počas prepisu nemožno pridávať nahrávky. Najprv prepis zastavte.')
+            return False
+        from file_drop import path_key
+        known = {path_key(path) for path in self.files}
+        added, duplicates, invalid = [], 0, 0
         for path in paths:
-            if Path(path).is_file() and str(Path(path).resolve()) not in self.files:
-                self.items.append(queue_item(path))
+            try:
+                if not isinstance(path, str) or not path or not Path(path).is_file():
+                    invalid += 1
+                    continue
+                key = path_key(path)
+                if key in known:
+                    duplicates += 1
+                    continue
+                added.append(queue_item(path))
+                known.add(key)
+            except (OSError, ValueError):
+                invalid += 1
+        self.items.extend(added)
         self.refresh_queue()
-        self.save_state()
+        if added and not self.save_state():
+            del self.items[-len(added):]
+            self.refresh_queue()
+            return False
+        self.status.set(f'Pridané: {len(added)}. Preskočené: {duplicates + invalid} '
+            f'(duplicity: {duplicates}, neexistujúce súbory/priečinky alebo neplatné cesty: {invalid}).')
+        return bool(added or duplicates)
 
     def add_files(self):
         files = filedialog.askopenfilenames(title='Vyberte zvukové súbory', filetypes=[
@@ -378,7 +398,7 @@ class App:
         self.busy = True
         self.update_selection()
         self.stop.clear()
-        for widget in (self.add, self.remove, self.lang_box, self.model_box, self.browse, self.output_entry, self.offline_box, self.start_button):
+        for widget in (self.add, self.remove, self.lang_box, self.model_box, self.device_box, self.browse, self.output_entry, self.offline_box, self.start_button):
             widget.configure(state='disabled')
         self.stop_button.configure(state='normal')
         self.progress['value'] = 0
@@ -386,7 +406,7 @@ class App:
         self.clock = ProgressClock(time.monotonic())
         self.batch_index = self.file_progress = 0
         self.save_state()
-        args = ([item['source'] for item in selected_items], self.output.get(), language, model, self.offline.get())
+        args = ([item['source'] for item in selected_items], self.output.get(), language, model, self.offline.get(), DEVICES.get(self.device_choice.get(), 'cpu'))
         threading.Thread(target=self.work, args=args, daemon=True).start()
 
     def cancel(self):
@@ -394,7 +414,46 @@ class App:
         self.status.set('Zastavujem po aktuálnom kroku… rozpracovaný text sa zachová.')
         self.stop_button.configure(state='disabled')
 
-    def work(self, files, folder, language, model_name, offline):
+    def device_changed(self, *_):
+        if not self.busy:
+            self.model = None
+            self.models.close()
+            self.device_status.set('Zariadenie: čaká na načítanie modelu')
+
+    def confirm_cpu(self):
+        """Called only on the Tk thread; closing the dialog means cancel."""
+        window = tk.Toplevel(self.root)
+        window.title('GPU nie je dostupné')
+        window.transient(self.root)
+        answer = [False]
+        ttk.Label(window, text='GPU sa nepodarilo použiť. Môžete pokračovať na CPU.', padding=20).pack()
+        actions = ttk.Frame(window, padding=12)
+        actions.pack(fill='x')
+        def finish(accepted):
+            answer[0] = accepted
+            window.destroy()
+        ttk.Button(actions, text='Pokračovať na CPU', command=lambda: finish(True)).pack(side='left', padx=6)
+        cancel = ttk.Button(actions, text='Zrušiť', command=lambda: finish(False))
+        cancel.pack(side='right', padx=6)
+        window.protocol('WM_DELETE_WINDOW', lambda: finish(False))
+        window.bind('<Escape>', lambda _event: finish(False))
+        window.grab_set()
+        cancel.focus_set()
+        self.root.wait_window(window)
+        return answer[0]
+
+    def request_cpu(self, exc, emit):
+        emit('log', f'GPU: {type(exc).__name__}: {exc}')
+        ack, answer = threading.Event(), []
+        emit('cpu_request', (ack, answer))
+        while not ack.wait(.1):
+            if self.stop.is_set():
+                raise InterruptedError('Prechod na CPU zrušený.')
+        if self.stop.is_set() or not answer or not answer[0]:
+            self.stop.set()
+            raise InterruptedError('Prechod na CPU zrušený; uložené úseky zostali zachované.')
+
+    def work(self, files, folder, language, model_name, offline, selected_device='cpu'):
         emit = lambda kind, value: self.events.put((kind, value))
         def update(identifier, **changes):
             ack = threading.Event()
@@ -413,7 +472,24 @@ class App:
                 self.models.close()
             self.model = None
             emit('status', 'Načítavam model do pamäte…')
-            self.model = self.models.get(language, model_name, self.cache, True, emit, self.stop)
+            def load():
+                emit('device', 'čaká na načítanie modelu')
+                self.model = self.models.get(language, model_name, self.cache, True, emit, self.stop, selected_device)
+                from speech_models import LocalAdapter
+                actual = self.model.device if isinstance(self.model, LocalAdapter) else self.model.model.device
+                emit('device', 'GPU (CUDA)' if actual == 'cuda' else 'CPU')
+                return self.model
+            def recover(exc):
+                nonlocal selected_device
+                self.request_cpu(exc, emit)
+                selected_device = 'cpu'
+                self.model = None
+                self.models.close()
+                return load()
+            try:
+                load()
+            except GPUError as exc:
+                recover(exc)
             self.loaded_revision = revision
             self.model_name = model_name
             from speech_models import LocalAdapter
@@ -439,7 +515,7 @@ class App:
                     settings = dict(self.resume_settings) if getattr(self, 'resume_settings', None) else job_settings(model_name, language)
                     settings['model_revision'] = revision
                     complete = transcribe_job(self.model, file, target, settings,
-                                              self.stop, emit, resume=resume)
+                                              self.stop, emit, resume=resume, recover_gpu=recover, selected_device=selected_device)
                     update(identifier, state='hotovo' if complete else 'prerušené')
                     done += int(complete)
                     emit('log', f'{"Uložené" if complete else "Čiastočný prepis"}: {target}')
@@ -496,6 +572,16 @@ class App:
                 self.file_progress = 0
             elif kind == 'device':
                 self.device_status.set('Zariadenie: ' + value)
+            elif kind == 'cpu_request':
+                ack, answer = value
+                try:
+                    accepted = not self.stop.is_set() and self.confirm_cpu()
+                    if accepted:
+                        self.device_choice.set(next(iter(DEVICES)))
+                        self.save_state()
+                    answer.append(accepted)
+                finally:
+                    ack.set()
             elif kind == 'segment':
                 preview.append(f'[{timestamp(value["start"])} – {timestamp(value["end"])}] {value["text"]}')
             elif kind == 'text':
@@ -556,6 +642,7 @@ class App:
                 widget.configure(state='normal')
             self.lang_box.configure(state='readonly')
             self.model_box.configure(state='readonly')
+            self.device_box.configure(state='readonly')
             self.stop_button.configure(state='disabled')
             self.update_selection()
             self.update_readiness()
@@ -592,7 +679,17 @@ if __name__ == '__main__':
                                       backupCount=2, encoding='utf-8')
         logging.getLogger('mixed_language').addHandler(handler)
         logging.getLogger('mixed_language').setLevel(logging.DEBUG)
-    if len(sys.argv) == 5 and sys.argv[1] == '--self-test-download':
+    if len(sys.argv) == 3 and sys.argv[1] == '--dnd-test':
+        # Isolated native Explorer QA; never load/save the user's queue.
+        from file_drop import create_root
+        root = create_root()
+        folder = Path(sys.argv[2])
+        app = App(root, folder / 'state')
+        app.cache = folder / 'models'
+        app.output.set(str(folder / 'results'))
+        root.title('ND TranskripThor – DnD test')
+        root.mainloop()
+    elif len(sys.argv) == 5 and sys.argv[1] == '--self-test-download':
         import json
         from model_catalog import download, cached_path
         folder = Path(sys.argv[4])
@@ -617,8 +714,8 @@ if __name__ == '__main__':
                 model = ModelManager().get('sk', SLOVAK_MODEL, sys.argv[2], True, lambda *a: None, threading.Event())
                 language = 'sk'
             else:
-                from faster_whisper import WhisperModel
-                model = WhisperModel(sys.argv[2], device='cpu', compute_type='int8', local_files_only=True)
+                model = ModelManager().get(None, sys.argv[2], folder / 'model-cache', True,
+                    lambda *a: None, threading.Event(), 'cpu')
                 language = 'hu' if sys.argv[1] == '--self-test-hu' else 'en'
                 if sys.argv[1] in ('--self-test-mixed', '--self-test-v2'):
                     language = MIXED_LANGUAGE
@@ -646,6 +743,7 @@ if __name__ == '__main__':
             (folder / 'diagnostika.txt').write_text(traceback.format_exc(), encoding='utf-8')
             sys.exit(1)
     else:
-        root = tk.Tk()
+        from file_drop import create_root
+        root = create_root()
         app = App(root)
         root.mainloop()

@@ -21,7 +21,33 @@ def segment_data(item):
                for w in (getattr(item, 'words', None) or [])], speaker='')
 
 
-def transcribe_job(model, source, target, settings, stop, emit, resume=False):
+def transcribe_chunk(model, chunk, language, previous, config, start, stop):
+    detected = language
+    if language == MIXED_LANGUAGE:
+        items, _ = transcribe_mixed(model, None, stop, config, True, audio=chunk,
+            speech_spans=[dict(start=0, end=len(chunk))], previous_language=previous, log_offset=start/SAMPLE_RATE)
+    elif isinstance(model, LocalAdapter):
+        items = checked_segments(model.infer(chunk), 0, len(chunk) / SAMPLE_RATE)
+    else:
+        items, info = model.transcribe(chunk, language=language, task='transcribe',
+            beam_size=5, vad_filter=False, word_timestamps=True, condition_on_previous_text=False)
+        detected = info.language
+    saved = []
+    # Exhaust the lazy iterator before committing anything, including mixed mode.
+    for item in items:
+        if stop.is_set():
+            break
+        selected = getattr(item, 'language', language or detected)
+        shifted = offset_segment(item, start / SAMPLE_RATE, len(chunk) / SAMPLE_RATE,
+                                 selected, getattr(item, 'language_confidence', None))
+        if shifted.text.strip():
+            if shifted.end <= shifted.start:
+                raise ValueError('Model vrátil text bez platného časového intervalu.')
+            saved.append(segment_data(shifted))
+    return saved
+
+
+def transcribe_job(model, source, target, settings, stop, emit, resume=False, recover_gpu=None, selected_device='cpu'):
     from faster_whisper.audio import decode_audio
     from faster_whisper.vad import VadOptions, get_speech_timestamps
     emit('status', 'Príprava zvuku: kontrolujem nahrávku…')
@@ -61,35 +87,19 @@ def transcribe_job(model, source, target, settings, stop, emit, resume=False):
                 return False
             start, end = plan[index]
             chunk = audio[start:end]
-            if language == MIXED_LANGUAGE:
-                items, _ = transcribe_mixed(model, None, stop, config, True, audio=chunk,
-                    speech_spans=[dict(start=0, end=len(chunk))], previous_language=previous, log_offset=start/SAMPLE_RATE)
-            elif isinstance(model, LocalAdapter):
-                try:
-                    raw = model.infer(chunk)
-                except Exception as exc:
-                    if model.device == 'cuda' and hardware_error(exc):
-                        model.on_cpu()
-                        emit('device', 'CPU')
-                        raw = model.infer(chunk)
-                    else:
-                        raise
-                items = checked_segments(raw, 0, len(chunk) / SAMPLE_RATE)
-            else:
-                items, info = model.transcribe(chunk, language=language, task='transcribe',
-                    beam_size=5, vad_filter=False, word_timestamps=True, condition_on_previous_text=False)
-                detected = info.language
-            saved = []
-            for item in items:
-                if stop.is_set():
-                    break
-                selected = getattr(item, 'language', language or (detected if not isinstance(model, LocalAdapter) else 'sk'))
-                shifted = offset_segment(item, start / SAMPLE_RATE, len(chunk) / SAMPLE_RATE,
-                                         selected, getattr(item, 'language_confidence', None))
-                if shifted.text.strip():
-                    if shifted.end <= shifted.start:
-                        raise ValueError('Model vrátil text bez platného časového intervalu.')
-                    saved.append(segment_data(shifted))
+            try:
+                saved = transcribe_chunk(model, chunk, language, previous, config, start, stop)
+            except Exception as exc:
+                project.export()
+                if selected_device != 'cuda' or not hardware_error(exc) or recover_gpu is None:
+                    raise
+                # The current chunk is uncommitted. All earlier chunks stay intact.
+                import traceback
+                traceback.clear_frames(exc.__traceback__)
+                model = None
+                model = recover_gpu(exc)
+                selected_device = 'cpu'
+                saved = transcribe_chunk(model, chunk, language, previous, config, start, stop)
             if stop.is_set():
                 # Entire unfinished chunk is retried. Never checkpoint a partial decoder iterator.
                 project.export()

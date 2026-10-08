@@ -50,7 +50,7 @@ class StateStore:
         raw = self.read('settings.json', {})
         raw = raw if isinstance(raw, dict) else {}
         result = {}
-        for key, choices in [('language', languages), ('model', models), ('theme', ('light', 'dark'))]:
+        for key, choices in [('language', languages), ('model', models), ('theme', ('light', 'dark')), ('device', ('cpu', 'cuda'))]:
             if isinstance(raw.get(key), str) and raw[key] in choices:
                 result[key] = raw[key]
         for key in ('offline', 'autoplay'):

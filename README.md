@@ -6,7 +6,7 @@ Podporuje slovenčinu, češtinu, angličtinu, maďarčinu aj zmiešané českos
 
 ## Stiahnutie a spustenie
 
-**[Stiahnuť ND TranskripThor 2.1.2.bugfix pre Windows](https://github.com/ndxnraw/TranskripThor/releases/download/v2.1.2.bugfix/ND-TranskripThor-2.1.2.bugfix-Windows.zip)**
+**[Stiahnuť ND TranskripThor 2.1.3b pre Windows](https://github.com/ndxnraw/TranskripThor/releases/download/v2.1.3b/ND-TranskripThor-2.1.3b-Windows.zip)**
 
 1. Rozbaľte celý ZIP.
 2. Spustite **ND TranskripThor.exe**. Priečinok `_internal` ponechajte vedľa neho; Python netreba inštalovať.

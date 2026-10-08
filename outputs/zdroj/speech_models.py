@@ -8,6 +8,10 @@ from types import SimpleNamespace
 
 SLOVAK_MODEL = 'kinit/whisper-large-v3-sk'
 SAMPLE_RATE = 16000
+DEVICES = {'CPU – kompatibilný režim': 'cpu', 'GPU (CUDA) – NVIDIA': 'cuda'}
+
+class GPUError(RuntimeError):
+    pass
 
 def route(language, selected):
     if selected == SLOVAK_MODEL and language != 'sk':
@@ -76,13 +80,6 @@ class LocalAdapter:
     def close(self):
         self.pipe = self.model = self.processor = None
 
-    def on_cpu(self):
-        self.emit('log', f'{self.model_id}: GPU nie je dostupné alebo nemá dosť pamäte; skúšam CPU.')
-        self.close()
-        release_memory()
-        self.device = 'cpu'
-        self.load()
-
     def transcribe(self, source, language=None, **kwargs):
         # Rovnaké PyAV dekódovanie, mono 16 kHz a Silero VAD ako pôvodný engine.
         from faster_whisper.audio import decode_audio
@@ -103,12 +100,8 @@ class LocalAdapter:
                     try:
                         items = self.infer(chunk)
                     except Exception as exc:
-                        if self.device == 'cuda' and hardware_error(exc):
-                            self.on_cpu()
-                            items = self.infer(chunk)
-                        else:
-                            raise RuntimeError(f'{self.model_id}: prepis zlyhal ({exc}). '
-                                'Pri nedostatku pamäte vyberte menší model v ponuke.') from exc
+                        raise RuntimeError(f'{self.model_id}: prepis zlyhal ({exc}). '
+                            'Pri nedostatku pamäte vyberte menší model v ponuke.') from exc
                     # Výsledok celého kroku sa overí pred emitovaním: žiadne duplikáty pri GPU retry.
                     for segment in checked_segments(items, start / SAMPLE_RATE, len(chunk) / SAMPLE_RATE):
                         if self.stop.is_set():
@@ -182,21 +175,23 @@ class ModelManager:
     def __init__(self):
         self.model = self.key = None
 
-    def get(self, language, selected_model, cache, offline, emit, stop):
+    def get(self, language, selected_model, cache, offline, emit, stop, selected_device='cpu'):
         requested = route(language, selected_model)
         if stop.is_set():
             raise InterruptedError('Načítanie prerušené.')
         # Jazyk nemení váhy viacjazyčného Whisperu; nevyžaduje opätovné načítanie.
-        key = (requested, str(Path(cache).resolve()))
+        selected = selected_device if selected_device in ('cpu', 'cuda') else 'cpu'
+        key = (requested, str(Path(cache).resolve()), selected)
         if key == self.key and self.model is not None:
             if isinstance(self.model, LocalAdapter):
                 self.model.stop, self.model.emit = stop, emit
             return self.model
         self.close()
         errors = []
-        selected = device(requested)
-        for target in ([selected, 'cpu'] if selected == 'cuda' else ['cpu']):
+        for target in [selected]:
             try:
+                if target == 'cuda' and device(requested) != 'cuda':
+                    raise GPUError('CUDA nie je na tomto počítači dostupná.')
                 emit('status', f'Načítavam model {requested} ({target}) do pamäte…')
                 model = load_backend(requested, cache, offline, target, emit, stop)
                 if stop.is_set():
@@ -216,6 +211,8 @@ class ModelManager:
                 release_memory()
                 if stop.is_set():
                     raise InterruptedError('Načítanie prerušené.') from exc
+                if target == 'cuda' and hardware_error(exc):
+                    raise GPUError(str(exc)) from exc
                 if target != 'cuda' or not hardware_error(exc):
                     break
         raise RuntimeError('Vybraný model sa nepodarilo načítať. Skontrolujte cache a RAM/VRAM. '

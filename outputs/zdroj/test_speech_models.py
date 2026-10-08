@@ -38,11 +38,11 @@ class ModelsTest(unittest.TestCase):
     @patch('speech_models.release_memory')
     @patch('speech_models.device', return_value='cuda')
     @patch('speech_models.load_backend')
-    def test_cuda_load_retry_cpu(self, load, *_):
+    def test_cuda_load_requires_explicit_cpu_confirmation(self, load, *_):
         load.side_effect = [RuntimeError('CUDA out of memory'), object()]
-        sm.ModelManager().get('sk', sm.SLOVAK_MODEL, 'cache', True, self.emit, self.stop)
-        self.assertEqual([x.args[3] for x in load.call_args_list], ['cuda', 'cpu'])
-        self.assertEqual([x.args[0] for x in load.call_args_list], [sm.SLOVAK_MODEL]*2)
+        with self.assertRaises(sm.GPUError):
+            sm.ModelManager().get('sk', sm.SLOVAK_MODEL, 'cache', True, self.emit, self.stop, 'cuda')
+        self.assertEqual([x.args[3] for x in load.call_args_list], ['cuda'])
 
     @patch('speech_models.release_memory')
     @patch('speech_models.device', return_value='cpu')
@@ -81,6 +81,10 @@ class ModelsTest(unittest.TestCase):
         self.assertFalse(kwargs['trust_remote_code'])
         self.assertEqual(kwargs['torch_dtype'], 'fp32')
         self.assertTrue(transformers.AutoProcessor.from_pretrained.call_args.kwargs['local_files_only'])
+        adapter.device = 'cuda'
+        with patch.dict(sys.modules, torch=torch, transformers=transformers):
+            adapter.load()
+        self.assertEqual(transformers.AutoModelForSpeechSeq2Seq.from_pretrained.call_args.kwargs['torch_dtype'], 'fp16')
 
     def test_adapter_chunks_cancel_gpu_retry(self):
         import numpy as np
@@ -91,11 +95,11 @@ class ModelsTest(unittest.TestCase):
         adapter.on_cpu = Mock(side_effect=lambda: setattr(adapter, 'device', 'cpu'))
         with patch.object(audio, 'decode_audio', return_value=np.zeros(30*16000, dtype=np.float32)), patch.object(vad, 'get_speech_timestamps', return_value=[{'start':0, 'end':30*16000}]):
             segments, info = adapter.transcribe('file.wav', language='sk')
-            result = list(segments)
-        self.assertEqual([s.start for s in result], [0, 28])
+            with self.assertRaisesRegex(RuntimeError, 'CUDA out of memory'):
+                list(segments)
         self.assertEqual(info.duration, 30)
-        adapter.on_cpu.assert_called_once()
-        self.assertEqual(adapter.infer.call_count, 3)
+        adapter.on_cpu.assert_not_called()
+        self.assertEqual(adapter.infer.call_count, 1)
         self.stop.set()
         with patch.object(audio, 'decode_audio', return_value=np.zeros(16000)), patch.object(vad, 'get_speech_timestamps') as get_vad:
             self.assertEqual(list(adapter.transcribe('file.wav', language='sk')[0]), [])
